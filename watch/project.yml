@@ -1,0 +1,25 @@
+name: WatchChat
+options:
+  bundleIdPrefix: com.johntenno
+  deploymentTarget:
+    watchOS: "11.0"
+targets:
+  WatchChat:
+    type: application
+    platform: watchOS
+    sources: [WatchChat]
+    info:
+      path: WatchChat/Info.plist
+      properties:
+        CFBundleDisplayName: claude-watchOS
+        WKApplication: true
+        WKWatchOnly: true
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.johntenno.watchchat
+        DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
