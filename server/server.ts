@@ -16,6 +16,8 @@ const TOKEN = Buffer.from(readFileSync(new URL("./token.txt", import.meta.url), 
 const claude = new ClaudeCli();
 const store = new ConversationStore();
 const usage = new UsageClient(() => claude.renewToken());
+// Warms the usage cache so the watch has a value even if its first request hits a network blip.
+usage.get().catch((e) => console.error(new Date().toISOString(), "Usage warm-up failed:", e));
 
 function isAuthorized(req: IncomingMessage): boolean {
   const given = Buffer.from((req.headers.authorization ?? "").replace(/^Bearer /, ""));

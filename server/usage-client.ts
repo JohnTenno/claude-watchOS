@@ -25,6 +25,16 @@ export class UsageClient {
 
   async get(): Promise<Usage> {
     if (this.cached && Date.now() - this.cached.at < CACHE_MS) return this.cached.usage;
+    try {
+      return await this.fetchUsage();
+    } catch (e) {
+      // A network blip (e.g. ETIMEDOUT) should not blank the gauges: serve the last good value.
+      if (this.cached) return this.cached.usage;
+      throw e;
+    }
+  }
+
+  private async fetchUsage(): Promise<Usage> {
     let response = await this.request();
     if ((response.status === 401 || response.status === 403) && (await this.renewToken())) {
       response = await this.request();

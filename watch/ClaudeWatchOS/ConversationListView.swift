@@ -7,6 +7,8 @@ struct ConversationListView: View {
         List {
             if let usage = model.usage {
                 UsageView(usage: usage)
+            } else if model.usageUnavailable {
+                Text("Uso no disponible").font(.footnote).foregroundStyle(.secondary)
             }
             NavigationLink {
                 ChatView(conversationId: nil)
