@@ -67,4 +67,4 @@ createServer(async (req, res) => {
     console.error(new Date().toISOString(), e);
     send(res, 500, { error: e instanceof Error ? e.message : String(e) });
   }
-}).listen(PORT, HOST, () => console.log(`WatchChat server listening on http://${HOST}:${PORT}`));
+}).listen(PORT, HOST, () => console.log(`claude-watchOS relay listening on http://${HOST}:${PORT}`));

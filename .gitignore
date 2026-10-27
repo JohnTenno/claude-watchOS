@@ -1,6 +1,6 @@
 server/token.txt
 server/session/
-watch/WatchChat/Config.swift
+watch/ClaudeWatchOS/Config.swift
 watch/*.xcodeproj
 node_modules/
 watch/build/

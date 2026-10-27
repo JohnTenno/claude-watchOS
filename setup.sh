@@ -10,7 +10,7 @@ TOKEN_FILE=server/token.txt
 [ -f "$TOKEN_FILE" ] || openssl rand -hex 32 > "$TOKEN_FILE"
 TOKEN=$(cat "$TOKEN_FILE")
 
-cat > watch/WatchChat/Config.swift <<EOF
+cat > watch/ClaudeWatchOS/Config.swift <<EOF
 import Foundation
 
 enum Config {
