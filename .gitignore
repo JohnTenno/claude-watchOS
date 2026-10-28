@@ -4,3 +4,4 @@ watch/ClaudeWatchOS/Config.swift
 watch/*.xcodeproj
 node_modules/
 watch/build/
+.DS_Store
