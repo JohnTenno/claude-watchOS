@@ -1,20 +1,27 @@
 // Relays chat messages from the watch app to headless Claude Code (`claude -p`),
 // so replies run on the user's Claude subscription instead of API tokens.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFileSync } from "node:fs";
-import { timingSafeEqual } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { ClaudeCli } from "./claude-cli.ts";
 import { ConversationStore } from "./conversation-store.ts";
+import { PhotoConverter } from "./photo-converter.ts";
+import { PHONE_PHOTO_MAX_AGE_MS, PHONE_PHOTO_PREFIX, UploadJanitor } from "./upload-janitor.ts";
 import { UsageClient } from "./usage-client.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
 // 127.0.0.1 = only via Tailscale Funnel; HOST=0.0.0.0 also allows the home Wi-Fi.
 const HOST = process.env.HOST ?? "127.0.0.1";
-const MAX_BODY_BYTES = 16 * 1024;
+// Ids are what upload handling generates; anything else is rejected so ids can never escape the uploads folder.
+const PHONE_PHOTO_ID_PATTERN = /^iphone-[0-9a-f]{16}$/;
 const TOKEN = Buffer.from(readFileSync(new URL("./token.txt", import.meta.url), "utf8").trim());
 
 const claude = new ClaudeCli();
 const store = new ConversationStore();
+const uploads = new UploadJanitor(claude.workDir);
+uploads.start();
+const photos = new PhotoConverter();
 const usage = new UsageClient(() => claude.renewToken());
 // Warms the usage cache so the watch has a value even if its first request hits a network blip.
 usage.get().catch((e) => console.error(new Date().toISOString(), "Usage warm-up failed:", e));
@@ -24,16 +31,58 @@ function isAuthorized(req: IncomingMessage): boolean {
   return given.length === TOKEN.length && timingSafeEqual(given, TOKEN);
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+// No size limit by request: images can be any weight (only token holders can post).
+function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > MAX_BODY_BYTES) reject(new Error("Body too large"));
-    });
-    req.on("end", () => resolve(body));
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
+}
+
+/** JPEG, PNG or HEIC/HEIF (ISO box "ftyp" at byte 4): what the iPhone camera and screenshots produce. */
+function isPhoto(body: Buffer): boolean {
+  const jpeg = body[0] === 0xff && body[1] === 0xd8 && body[2] === 0xff;
+  const png = body.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const heic = body.subarray(4, 8).toString("latin1") === "ftyp" && /^(heic|heix|hevc|mif1|msf1)$/.test(body.subarray(8, 12).toString("latin1"));
+  return jpeg || png || heic;
+}
+
+function phonePhotoUrl(id: string): URL | undefined {
+  const url = new URL(id, uploads.dir);
+  return PHONE_PHOTO_ID_PATTERN.test(id) && existsSync(url) ? url : undefined;
+}
+
+/** The iPhone Shortcut posts the original photo it just took as the raw body; it is kept as-is (format detected on read). */
+async function handlePhotoUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const raw = await readBody(req);
+  // The Shortcut sends {"photo": base64} so the body has a known length: raw file bodies from automations died
+  // mid-upload at the Funnel (HTTP/2 PROTOCOL_ERROR). Raw bodies still work for manual runs and curl.
+  const body = req.headers["content-type"]?.includes("application/json")
+    ? Buffer.from(String((JSON.parse(raw.toString("utf8")) as { photo?: unknown }).photo ?? ""), "base64")
+    : raw;
+  if (!isPhoto(body)) {
+    console.error(new Date().toISOString(), `Rejected iPhone photo: ${body.length} bytes, starts with ${body.subarray(0, 16).toString("hex")}`);
+    return send(res, 400, { error: "Body must be a JPEG, PNG or HEIC photo" });
+  }
+  // Named by content hash: closing the Camera without a new shot re-sends the same photo, which is then skipped.
+  const id = `${PHONE_PHOTO_PREFIX}${createHash("sha256").update(body).digest("hex").slice(0, 16)}`;
+  const url = new URL(id, uploads.dir);
+  if (existsSync(url)) return send(res, 200, { ok: true, duplicate: true });
+  writeFileSync(url, body);
+  console.log(new Date().toISOString(), `iPhone photo saved (${body.length} bytes)`);
+  send(res, 200, { ok: true });
+}
+
+/** iPhone photos still kept (last day), newest first, for the watch's photo grid. */
+function listPhonePhotos(): { id: string; takenAt: string }[] {
+  return readdirSync(uploads.dir)
+    .filter((f) => f.startsWith(PHONE_PHOTO_PREFIX))
+    .map((f) => ({ id: f, mtime: statSync(new URL(f, uploads.dir)).mtime }))
+    .filter((p) => Date.now() - p.mtime.getTime() <= PHONE_PHOTO_MAX_AGE_MS)
+    .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
+    .map((p) => ({ id: p.id, takenAt: p.mtime.toISOString() }));
 }
 
 function send(res: ServerResponse, status: number, payload: object): void {
@@ -42,21 +91,39 @@ function send(res: ServerResponse, status: number, payload: object): void {
 }
 
 async function handleChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const { text, conversationId } = JSON.parse(await readBody(req)) as { text?: unknown; conversationId?: unknown };
-  if (typeof text !== "string" || text.trim() === "") return send(res, 400, { error: "Missing text" });
+  const { text, conversationId, photoId } = JSON.parse((await readBody(req)).toString("utf8")) as {
+    text?: unknown; conversationId?: unknown; photoId?: unknown;
+  };
+  // The watch only names the iPhone photo; the original already lives on this host.
+  const photoUrl = typeof photoId === "string" ? phonePhotoUrl(photoId) : undefined;
+  if (photoId !== undefined && !photoUrl) return send(res, 400, { error: "Photo not found (iPhone photos are kept 1 day)" });
+  if (typeof text !== "string" || (text.trim() === "" && !photoUrl)) return send(res, 400, { error: "Missing text" });
   if (conversationId !== undefined && (typeof conversationId !== "string" || !ConversationStore.isValidId(conversationId))) {
     return send(res, 400, { error: "Invalid conversationId" });
   }
-  const { reply, sessionId } = await claude.ask(text, conversationId);
-  store.append(sessionId, conversationId, text, reply);
+  const image = photoUrl && (await photos.forClaude(fileURLToPath(photoUrl))).toString("base64");
+  const { reply, sessionId } = await claude.ask(text.trim(), conversationId, image);
+  store.append(sessionId, conversationId, image ? `📷 ${text.trim()}`.trim() : text, reply);
   send(res, 200, { reply, conversationId: sessionId });
 }
 
 createServer(async (req, res) => {
-  if (!isAuthorized(req)) return send(res, 401, { error: "Unauthorized" });
   const path = new URL(req.url ?? "/", "http://localhost").pathname;
+  if (!isAuthorized(req)) {
+    console.error(new Date().toISOString(), `401 ${req.method} ${path}`);
+    return send(res, 401, { error: "Unauthorized" });
+  }
   try {
     if (req.method === "POST" && path === "/chat") return await handleChat(req, res);
+    if (req.method === "POST" && path === "/photos") return await handlePhotoUpload(req, res);
+    if (req.method === "GET" && path === "/photos") return send(res, 200, listPhonePhotos());
+    const photo = /^\/photos\/([^/]+)$/.exec(path);
+    if (req.method === "GET" && photo) {
+      const url = phonePhotoUrl(photo[1]);
+      if (!url) return send(res, 404, { error: "Not found" });
+      // A thumbnail, not the original: the watch only shows it in the grid. base64 so JSONDecoder reads it into Data.
+      return send(res, 200, { thumbnail: (await photos.thumbnail(fileURLToPath(url))).toString("base64") });
+    }
     if (req.method === "GET" && path === "/usage") return send(res, 200, await usage.get());
     if (req.method === "GET" && path === "/conversations") return send(res, 200, store.list());
     const match = /^\/conversations\/([^/]+)$/.exec(path);

@@ -4,8 +4,14 @@ struct MessageBubble: View {
     let message: Message
 
     var body: some View {
-        Text(message.text)
-            .font(.footnote)
+        VStack(alignment: .leading, spacing: 4) {
+            if let data = message.image, let image = UIImage(data: data) {
+                Image(uiImage: image).resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            if !message.text.isEmpty {
+                Text(message.text).font(.footnote)
+            }
+        }
             .padding(8)
             .background(background, in: RoundedRectangle(cornerRadius: 10))
             .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)

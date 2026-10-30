@@ -10,7 +10,7 @@ export type ClaudeReply = { reply: string; sessionId: string };
 
 /** Runs headless Claude Code (`claude -p`), which uses the user's subscription login. */
 export class ClaudeCli {
-  private readonly workDir = new URL("./session/", import.meta.url).pathname;
+  readonly workDir =new URL("./session/", import.meta.url).pathname;
   // Serializes calls so two requests never write to the same session at once.
   private queue: Promise<unknown> = Promise.resolve();
   private lastRenew = 0;
@@ -19,7 +19,7 @@ export class ClaudeCli {
     mkdirSync(this.workDir, { recursive: true });
   }
 
-  ask(text: string, sessionId?: string): Promise<ClaudeReply> {
+  ask(text: string, sessionId?: string, imageJpegBase64?: string): Promise<ClaudeReply> {
     const args = [
       "-p",
       "--tools", "", // chat only: no file, shell or web access on this Mac
@@ -27,12 +27,22 @@ export class ClaudeCli {
       "--setting-sources", "",
       // Replaces Claude Code's coding-agent prompt (memory, tools…) with a plain chat assistant.
       "--system-prompt", SYSTEM_PROMPT,
-      "--output-format", "json",
+      // stream-json input is the only way to pass an image without enabling file tools.
+      "--input-format", "stream-json",
+      "--output-format", "stream-json",
+      "--verbose", // required by -p with stream-json output
       ...(sessionId ? ["--resume", sessionId] : []),
     ];
+    const content = [
+      ...(imageJpegBase64 ? [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageJpegBase64 } }] : []),
+      ...(text ? [{ type: "text", text }] : []),
+    ];
+    const input = JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n";
     const job = this.queue.then(async () => {
       // Prompt goes through stdin so text starting with "-" is never parsed as a flag.
-      const result = JSON.parse(await this.run(args, text)) as { result?: string; session_id?: string; is_error?: boolean };
+      type ResultEvent = { type?: string; result?: string; session_id?: string; is_error?: boolean };
+      const events = (await this.run(args, input)).split("\n").filter(Boolean).map((l) => JSON.parse(l) as ResultEvent);
+      const result = events.find((e) => e.type === "result") ?? {};
       if (result.is_error || typeof result.result !== "string" || !result.session_id) {
         throw new Error(result.result || "Claude returned no reply");
       }

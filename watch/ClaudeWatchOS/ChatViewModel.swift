@@ -27,15 +27,20 @@ final class ChatViewModel {
         }
     }
 
+    /// Sent with the next message, then cleared.
+    var pendingPhoto: PhonePhoto?
+
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isSending else { return }
-        messages.append(Message(role: .user, text: trimmed))
+        let photo = pendingPhoto
+        guard !trimmed.isEmpty || photo != nil, !isSending else { return }
+        messages.append(Message(role: .user, text: trimmed, image: photo?.thumbnail))
+        pendingPhoto = nil
         isSending = true
         Task {
             defer { isSending = false }
             do {
-                let result = try await service.send(trimmed, conversationId: conversationId)
+                let result = try await service.send(trimmed, photoId: photo?.id, conversationId: conversationId)
                 conversationId = result.conversationId
                 messages.append(Message(role: .assistant, text: result.reply))
             } catch {

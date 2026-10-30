@@ -16,13 +16,30 @@ struct ChatView: View {
                     if model.isSending || model.isLoading {
                         ProgressView().frame(maxWidth: .infinity)
                     }
+                    if let data = model.pendingPhoto?.thumbnail, let image = UIImage(data: data) {
+                        HStack {
+                            Image(uiImage: image).resizable().scaledToFit().frame(height: 50)
+                            Spacer()
+                            Button("Quitar", systemImage: "xmark") { model.pendingPhoto = nil }
+                                .labelStyle(.iconOnly)
+                            Button("Enviar", systemImage: "paperplane.fill") { model.send(draft); draft = "" }
+                                .labelStyle(.iconOnly)
+                        }
+                        .disabled(model.isSending)
+                    }
                     TextField("Escribe…", text: $draft)
                         .disabled(model.isSending)
                         .onSubmit {
                             model.send(draft)
                             draft = ""
                         }
-                        .id("input")
+                    NavigationLink {
+                        PhonePhotoGridView { model.pendingPhoto = $0 }
+                    } label: {
+                        Label("Fotos del iPhone", systemImage: "iphone")
+                    }
+                    .disabled(model.isSending)
+                    .id("input")
                 }
             }
             .onChange(of: model.messages.count) {

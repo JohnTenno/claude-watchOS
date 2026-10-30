@@ -2,7 +2,8 @@ import Foundation
 
 /// Talks to the Mac relay server, which forwards messages to Claude Code.
 final class ChatService {
-    private struct ChatRequest: Encodable { let text: String; let conversationId: String? }
+    /// `photoId` names an iPhone photo already on the relay, which hands the original to Claude.
+    private struct ChatRequest: Encodable { let text: String; let conversationId: String?; let photoId: String? }
     private struct ChatResponse: Decodable { let reply: String; let conversationId: String }
     private struct ErrorResponse: Decodable { let error: String }
     private struct ConversationDetail: Decodable { let messages: [Message] }
@@ -12,8 +13,8 @@ final class ChatService {
     }
 
     /// Returns the reply and the conversation id to use for the next message.
-    func send(_ text: String, conversationId: String?) async throws -> (reply: String, conversationId: String) {
-        let body = try JSONEncoder().encode(ChatRequest(text: text, conversationId: conversationId))
+    func send(_ text: String, photoId: String?, conversationId: String?) async throws -> (reply: String, conversationId: String) {
+        let body = try JSONEncoder().encode(ChatRequest(text: text, conversationId: conversationId, photoId: photoId))
         let response: ChatResponse = try await request("chat", method: "POST", body: body, timeout: 320)
         return (response.reply, response.conversationId)
     }
@@ -25,6 +26,17 @@ final class ChatService {
     func messages(of conversationId: String) async throws -> [Message] {
         let detail: ConversationDetail = try await request("conversations/\(conversationId)")
         return detail.messages
+    }
+
+    /// Photos the iPhone Shortcut uploaded in the last day, newest first.
+    func phonePhotos() async throws -> [PhonePhoto] {
+        try await request("photos")
+    }
+
+    func phonePhotoThumbnail(id: String) async throws -> Data {
+        struct Thumbnail: Decodable { let thumbnail: Data }
+        let response: Thumbnail = try await request("photos/\(id)")
+        return response.thumbnail
     }
 
     func usage() async throws -> Usage {
