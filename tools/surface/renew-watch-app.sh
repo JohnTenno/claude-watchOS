@@ -32,7 +32,8 @@ fi
 # The tunnel needs root for its TUN interface; its PID file lets us stop exactly that process.
 TUNNEL_LOG="$WORK_DIR/tunnel.log"
 TUNNEL_PID="$WORK_DIR/tunnel.pid"
-stop_tunnel() { [ -f "$TUNNEL_PID" ] && sudo -n kill "$(cat "$TUNNEL_PID")" 2>/dev/null; rm -f "$TUNNEL_PID"; }
+# `|| true`: the tunnel may already have exited, and a failed kill must not abort (set -e) before the stale PID file is removed.
+stop_tunnel() { if [ -f "$TUNNEL_PID" ]; then sudo -n kill "$(cat "$TUNNEL_PID")" 2>/dev/null || true; fi; rm -f "$TUNNEL_PID"; }
 trap stop_tunnel EXIT
 stop_tunnel
 sudo -n setsid sh -c 'echo $$ > "$1"; shift; exec env HOME="$0" "$@"' "$HOME" "$TUNNEL_PID" \
