@@ -1,0 +1,6 @@
+[Unit]
+Description=Alert via ntfy when the claude-watchOS iCloud Photos download stops
+
+[Service]
+Type=oneshot
+ExecStart=%h/claude-watchOS/tools/elite/check-icloud-photos.sh

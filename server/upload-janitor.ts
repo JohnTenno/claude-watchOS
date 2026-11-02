@@ -15,11 +15,14 @@ type TranscriptLine = { timestamp?: string };
 /** Removes photos older than 2 days (iPhone uploads: 1 day): the saved file and the base64 copy inside Claude Code's session transcripts. */
 export class UploadJanitor {
   readonly dir = new URL("./session/uploads/", import.meta.url);
+  // Filled by icloudpd with recent iCloud Photos (see README); file mtimes are the photos' creation dates.
+  readonly icloudDir = new URL("./session/icloud/", import.meta.url);
   // Claude Code keeps transcripts under ~/.claude/projects/<cwd with non-alphanumerics as "-">.
   private readonly transcriptDir: string;
 
   constructor(claudeWorkDir: string) {
     mkdirSync(this.dir, { recursive: true });
+    mkdirSync(this.icloudDir, { recursive: true });
     this.transcriptDir = join(homedir(), ".claude", "projects", claudeWorkDir.replace(/\/$/, "").replace(/[^a-zA-Z0-9]/g, "-"));
   }
 
@@ -33,6 +36,10 @@ export class UploadJanitor {
       const url = new URL(file, this.dir);
       const maxAge = file.startsWith(PHONE_PHOTO_PREFIX) ? PHONE_PHOTO_MAX_AGE_MS : MAX_AGE_MS;
       if (now - statSync(url).mtimeMs > maxAge) rmSync(url);
+    }
+    for (const file of readdirSync(this.icloudDir)) {
+      const url = new URL(file, this.icloudDir);
+      if (now - statSync(url).mtimeMs > PHONE_PHOTO_MAX_AGE_MS) rmSync(url, { recursive: true });
     }
     if (!existsSync(this.transcriptDir)) return;
     for (const file of readdirSync(this.transcriptDir).filter((f) => f.endsWith(".jsonl"))) {

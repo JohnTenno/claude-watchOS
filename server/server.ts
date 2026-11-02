@@ -13,8 +13,9 @@ import { UsageClient } from "./usage-client.ts";
 const PORT = Number(process.env.PORT ?? 8787);
 // 127.0.0.1 = only via Tailscale Funnel; HOST=0.0.0.0 also allows the home Wi-Fi.
 const HOST = process.env.HOST ?? "127.0.0.1";
-// Ids are what upload handling generates; anything else is rejected so ids can never escape the uploads folder.
 const PHONE_PHOTO_ID_PATTERN = /^iphone-[0-9a-f]{16}$/;
+const ICLOUD_FILE_PATTERN = /^[\w-]+\.(heic|jpe?g|png)$/i;
+const MAX_GRID_PHOTOS = 20;
 const TOKEN = Buffer.from(readFileSync(new URL("./token.txt", import.meta.url), "utf8").trim());
 
 const claude = new ClaudeCli();
@@ -49,9 +50,22 @@ function isPhoto(body: Buffer): boolean {
   return jpeg || png || heic;
 }
 
+/** Photos from the Shortcut (uploads/iphone-<hash>) and from iCloud Photos via icloudpd (icloud/<name>.HEIC…). */
+function phonePhotoFiles(): { id: string; url: URL }[] {
+  return [
+    ...readdirSync(uploads.dir)
+      .filter((f) => PHONE_PHOTO_ID_PATTERN.test(f))
+      .map((f) => ({ id: f, url: new URL(f, uploads.dir) })),
+    // Skips icloudpd's partial downloads and anything that is not a still photo.
+    ...readdirSync(uploads.icloudDir)
+      .filter((f) => ICLOUD_FILE_PATTERN.test(f))
+      .map((f) => ({ id: `icloud-${f}`, url: new URL(f, uploads.icloudDir) })),
+  ];
+}
+
+// Looked up among existing files, so a request can never name a path outside the photo folders.
 function phonePhotoUrl(id: string): URL | undefined {
-  const url = new URL(id, uploads.dir);
-  return PHONE_PHOTO_ID_PATTERN.test(id) && existsSync(url) ? url : undefined;
+  return phonePhotoFiles().find((p) => p.id === id)?.url;
 }
 
 /** The iPhone Shortcut posts the original photo it just took as the raw body; it is kept as-is (format detected on read). */
@@ -75,13 +89,13 @@ async function handlePhotoUpload(req: IncomingMessage, res: ServerResponse): Pro
   send(res, 200, { ok: true });
 }
 
-/** iPhone photos still kept (last day), newest first, for the watch's photo grid. */
+/** Newest iPhone photos of the last day, for the watch's photo grid (capped so it stays quick to scroll). */
 function listPhonePhotos(): { id: string; takenAt: string }[] {
-  return readdirSync(uploads.dir)
-    .filter((f) => f.startsWith(PHONE_PHOTO_PREFIX))
-    .map((f) => ({ id: f, mtime: statSync(new URL(f, uploads.dir)).mtime }))
+  return phonePhotoFiles()
+    .map((p) => ({ id: p.id, mtime: statSync(p.url).mtime }))
     .filter((p) => Date.now() - p.mtime.getTime() <= PHONE_PHOTO_MAX_AGE_MS)
     .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
+    .slice(0, MAX_GRID_PHOTOS)
     .map((p) => ({ id: p.id, takenAt: p.mtime.toISOString() }));
 }
 
