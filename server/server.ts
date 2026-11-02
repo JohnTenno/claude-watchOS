@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { ClaudeCli } from "./claude-cli.ts";
 import { ConversationStore } from "./conversation-store.ts";
 import { PhotoConverter } from "./photo-converter.ts";
-import { PHONE_PHOTO_MAX_AGE_MS, PHONE_PHOTO_PREFIX, UploadJanitor } from "./upload-janitor.ts";
+import { PHONE_PHOTO_PREFIX, UploadJanitor } from "./upload-janitor.ts";
 import { UsageClient } from "./usage-client.ts";
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -89,11 +89,13 @@ async function handlePhotoUpload(req: IncomingMessage, res: ServerResponse): Pro
   send(res, 200, { ok: true });
 }
 
-/** Newest iPhone photos of the last day, for the watch's photo grid (capped so it stays quick to scroll). */
+/** Newest iPhone photos taken today (server's local time), for the watch's photo grid (capped so it stays quick to scroll). */
 function listPhonePhotos(): { id: string; takenAt: string }[] {
+  const startOfToday = new Date().setHours(0, 0, 0, 0);
   return phonePhotoFiles()
     .map((p) => ({ id: p.id, mtime: statSync(p.url).mtime }))
-    .filter((p) => Date.now() - p.mtime.getTime() <= PHONE_PHOTO_MAX_AGE_MS)
+    // Yesterday's files stay on disk until UploadJanitor's 24 h cutoff, so icloudpd's 1-day window never re-downloads them.
+    .filter((p) => p.mtime.getTime() >= startOfToday)
     .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
     .slice(0, MAX_GRID_PHOTOS)
     .map((p) => ({ id: p.id, takenAt: p.mtime.toISOString() }));
